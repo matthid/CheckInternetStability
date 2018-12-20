@@ -7,6 +7,8 @@ open FSharp.Control.Tasks.V2
 open Giraffe
 open Saturn
 open Shared
+open Microsoft.AspNetCore.SignalR
+open Microsoft.AspNetCore.Hosting
 
 
 let publicPath = Path.GetFullPath "../Client/public"
@@ -24,6 +26,15 @@ let webApp = router {
 
 let configureSerialization (services:IServiceCollection) =
     services.AddSingleton<Giraffe.Serialization.Json.IJsonSerializer>(Thoth.Json.Giraffe.ThothSerializer())
+        |> ignore
+    services.AddSignalR() |> ignore
+    services
+
+type ChatHub() =
+    inherit Hub()
+
+    member x.SendMessage(user:string, message:string) =
+        x.Clients.All.SendAsync("ReceiveMessage", user, message)
 
 let app = application {
     url ("http://0.0.0.0:" + port.ToString() + "/")
@@ -32,6 +43,13 @@ let app = application {
     use_static publicPath
     service_config configureSerialization
     use_gzip
+    use_cors "AllowAll" (fun builder -> ())
+
+    app_config (fun app ->
+        app.UseSignalR (fun routes ->
+            routes.MapHub<ChatHub>("/hub")
+        )
+    )
 }
 
 run app
