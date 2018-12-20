@@ -4,7 +4,15 @@
         <TargetFramework>netstandard2.0</TargetFramework>
     </PropertyGroup>
     <ItemGroup>
+        <None Include="zoneConfig.js" />
+        <None Include="webpack.config.js" />
         <Compile Include="..\Shared\Shared.fs" />
+        <Compile Include="external\SignalR.fs" />
+        <Compile Include="external\Fable.Recharts.fs" />
+        <Compile Include="external\ZoneJs.fs" />
+        <Compile Include="Utils.fs" />
+        <Compile Include="PerfHelpers.fs" />
+        <Compile Include="PingConnection.fs" />
         <Compile Include="Client.fs" />
     </ItemGroup>
     <Import Project="..\..\.paket\Paket.Restore.targets" />

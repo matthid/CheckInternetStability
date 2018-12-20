@@ -1,11 +1,16 @@
 module Client
 
+open System
+
 open Elmish
 open Elmish.React
 
+open Fable
 open Fable.Helpers.React
 open Fable.Helpers.React.Props
+open Fable.PowerPack
 open Fable.PowerPack.Fetch
+open Fable.Import
 
 open Thoth.Json
 
@@ -14,32 +19,30 @@ open Shared
 
 open Fulma
 
-
 // The model holds data that you want to keep track of while the application is running
 // in this case, we are keeping track of a counter
 // we mark it as optional, because initially it will not be available from the client
 // the initial value will be requested from server
-type Model = { Counter: Counter option }
+type Model =
+  { PingerModel : PingConnection.Model
+    SpeedTest : TimeSpan option
+    SpeedTestData : (DateTime * int * int) list }
 
 // The Msg type defines what events/actions can occur while the application is running
 // the state of the application changes *only* in reaction to these events
 type Msg =
-| Increment
-| Decrement
-| InitialCountLoaded of Result<Counter, exn>
-
-let initialCounter = fetchAs<Counter> "/api/init" (Decode.Auto.generateDecoder())
+    | PingerMessage of PingConnection.Msg
+    | SetSpeedTest of TimeSpan option
+    | AddSpeedTestDataPoint of DateTime * int * int
 
 // defines the initial state and initial command (= side-effect) of the application
 let init () : Model * Cmd<Msg> =
-    let initialModel = { Counter = None }
-    let loadCountCmd =
-        Cmd.ofPromise
-            initialCounter
-            []
-            (Ok >> InitialCountLoaded)
-            (Error >> InitialCountLoaded)
-    initialModel, loadCountCmd
+    let pingModel, pingCmd = PingConnection.init()
+    let initialModel = 
+        { PingerModel = pingModel
+          SpeedTest = None
+          SpeedTestData = [] }
+    initialModel, Cmd.batch [ Cmd.map PingerMessage pingCmd ]
 
 
 
@@ -47,17 +50,11 @@ let init () : Model * Cmd<Msg> =
 // It can also run side-effects (encoded as commands) like calling the server via Http.
 // these commands in turn, can dispatch messages to which the update function will react.
 let update (msg : Msg) (currentModel : Model) : Model * Cmd<Msg> =
-    match currentModel.Counter, msg with
-    | Some counter, Increment ->
-        let nextModel = { currentModel with Counter = Some { Value = counter.Value + 1 } }
-        nextModel, Cmd.none
-    | Some counter, Decrement ->
-        let nextModel = { currentModel with Counter = Some { Value = counter.Value - 1 } }
-        nextModel, Cmd.none
-    | _, InitialCountLoaded (Ok initialCount)->
-        let nextModel = { Counter = Some initialCount }
-        nextModel, Cmd.none
-
+    match msg with
+    | PingerMessage pingMsg ->
+        let updatedPingModel, updatedPingCmd = PingConnection.update true pingMsg currentModel.PingerModel
+        let nextModel = { currentModel with PingerModel = updatedPingModel }
+        nextModel, Cmd.map PingerMessage updatedPingCmd
     | _ -> currentModel, Cmd.none
 
 
@@ -75,14 +72,9 @@ let safeComponents =
            ]
 
     p [ ]
-        [ strong [] [ str "SAFE Template" ]
+        [ strong [] [ str "Internet Connection Test" ]
           str " powered by: "
           components ]
-
-let show = function
-| { Counter = Some counter } -> string counter.Value
-| { Counter = None   } -> "Loading..."
-
 let button txt onClick =
     Button.button
         [ Button.IsFullWidth
@@ -90,19 +82,24 @@ let button txt onClick =
           Button.OnClick onClick ]
         [ str txt ]
 
+let renderLabel (props:obj) =
+    str "test"
+
 let view (model : Model) (dispatch : Msg -> unit) =
     div []
         [ Navbar.navbar [ Navbar.Color IsPrimary ]
             [ Navbar.Item.div [ ]
                 [ Heading.h2 [ ]
-                    [ str "SAFE Template" ] ] ]
+                    [ str "Internet Connection Test" ] ] ]
 
           Container.container []
               [ Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
-                    [ Heading.h3 [] [ str ("Press buttons to manipulate counter: " + show model) ] ]
-                Columns.columns []
-                    [ Column.column [] [ button "-" (fun _ -> dispatch Decrement) ]
-                      Column.column [] [ button "+" (fun _ -> dispatch Increment) ] ] ]
+                    [ Heading.h3 [] [ str ("Setup your options") ] ]
+                //Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
+                //    [ Heading.h3 [] [ str ("Speed test interval: " + string model.SpeedTest) ] ]
+                PingConnection.viewOptions model.PingerModel (Msg.PingerMessage >> dispatch)
+                PingConnection.view model.PingerModel (Msg.PingerMessage >> dispatch)
+              ]
 
           Footer.footer [ ]
                 [ Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
@@ -113,13 +110,39 @@ open Elmish.Debug
 open Elmish.HMR
 #endif
 
-Program.mkProgram init update view
+/// Trace all the updates to the console
+let withZonePath (program: Program<'arg, 'model, 'msg, 'view>) =
+    let zonedInit (arg:'arg) =
+        PerfHelpers.runRoot(fun _ ->
+            let initModel,cmd = program.init arg
+            //Log.toConsole ("Initial state:", initModel)
+            initModel,cmd)
+        
+    let zonedUpdate msg model =
+        PerfHelpers.runRoot(fun _ ->
+            //Log.toConsole ("New message:", msg)
+            let newModel,cmd = program.update msg model
+            //Log.toConsole ("Updated state:", newModel)
+            newModel,cmd)
+        
+    let zonedView msg dispatch =
+        PerfHelpers.runRoot(fun _ ->
+            program.view msg dispatch)
+
+    { program with
+        init = zonedInit 
+        update = zonedUpdate
+        view = zonedView }
+PerfHelpers.runRoot(fun _ ->
+    Program.mkProgram init update view
 #if DEBUG
-|> Program.withConsoleTrace
-|> Program.withHMR
+    //|> Program.withConsoleTrace
+    |> Program.withHMR
 #endif
-|> Program.withReact "elmish-app"
+    |> Program.withReact "elmish-app"
 #if DEBUG
-|> Program.withDebugger
+    |> Program.withDebugger
 #endif
-|> Program.run
+    |> withZonePath
+    |> Program.run
+)

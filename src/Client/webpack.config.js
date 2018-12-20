@@ -30,6 +30,8 @@ var babelOptions = {
 module.exports = {
     entry: {
         "app": [
+            resolve("./zoneConfig.js"),
+            "zone.js",
             "whatwg-fetch",
             "@babel/polyfill",
             resolve("./Client.fsproj")
@@ -77,6 +79,11 @@ module.exports = {
     devServer: {
         // redirect requests that start with /api/* to the server on port 8085
         proxy: {
+            '/signalr/*': {
+                target: 'http://localhost:' + (process.env.SERVER_PROXY_PORT || "8085"),
+                changeOrigin: true,
+                ws: true
+            },
             '/api/*': {
                 target: 'http://localhost:' + (process.env.SERVER_PROXY_PORT || "8085"),
                 changeOrigin: true

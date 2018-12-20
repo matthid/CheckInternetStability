@@ -30,26 +30,29 @@ let configureSerialization (services:IServiceCollection) =
     services.AddSignalR() |> ignore
     services
 
-type ChatHub() =
+type PingHub() =
     inherit Hub()
 
+    member x.Ping() =
+        "pong"
     member x.SendMessage(user:string, message:string) =
-        x.Clients.All.SendAsync("ReceiveMessage", user, message)
+        x.Clients.All.SendAsync("messageReceived", user, message)
 
 let app = application {
-    url ("http://0.0.0.0:" + port.ToString() + "/")
-    use_router webApp
-    memory_cache
-    use_static publicPath
     service_config configureSerialization
-    use_gzip
-    use_cors "AllowAll" (fun builder -> ())
-
+    use_static publicPath
+    use_cors "AllowAll" (fun builder ->
+        builder.AllowAnyOrigin () |> ignore)
+        
     app_config (fun app ->
         app.UseSignalR (fun routes ->
-            routes.MapHub<ChatHub>("/hub")
+            routes.MapHub<PingHub>(Microsoft.AspNetCore.Http.PathString "/signalr/pinghub")
         )
     )
+    url ("http://0.0.0.0:" + port.ToString() + "/")
+    memory_cache
+    use_gzip
+    use_router webApp
 }
 
 run app
