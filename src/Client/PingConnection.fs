@@ -107,7 +107,8 @@ let fromSimpleDataPoint (ts:DateTime) (dp:DataPoint) =
 type Model =
   { PingInterval : TimeSpan
     ChartData : ChartDataPoint list
-    //CurrentData : ChartDataPoint array
+    CurrentData : ChartDataPoint array
+    CurrentMaxEpoch : TimeSpan
     Disconnects : int
     PingRunning : bool
     IsConnected : bool
@@ -158,7 +159,8 @@ let init () : Model * Cmd<Msg> =
           PingRunning = false
           MaxShowEvents = 60
           ChartData = [fromSimpleDataPoint DateTime.Now Start]
-          //CurrentData = [|fromSimpleDataPoint DateTime.Now Start|]
+          CurrentData = [|fromSimpleDataPoint DateTime.Now Start|]
+          CurrentMaxEpoch = DateTime.Now - epoch
           Disconnects = 0
           IsConnected = false }
     initialModel, Cmd.batch [ registerOnClose(); connectPromise () ]
@@ -203,17 +205,17 @@ let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg
             let nextModel = { currentModel with MaxShowEvents = ev }
             nextModel, Cmd.none
 
-    // if allowLongRunning && not newModel.PingRunning then
+    if allowLongRunning && not newModel.PingRunning then
         // re-calculate CurrentData
-    //Browser.console.log("allowLongRunning")
-    //let currentData =
-    //    newModel.ChartData
-    //    |> List.tryTake newModel.MaxShowEvents
-    //    |> List.rev
-    //    |> List.toArray
-    //
-    //{ newModel with CurrentData = currentData }, newCmd
-    newModel, newCmd
+        Browser.console.log("allowLongRunning")
+        let data =
+            newModel.ChartData
+            |> List.tryTake newModel.MaxShowEvents
+            |> List.rev
+            |> List.toArray
+        
+        { newModel with CurrentData = data; CurrentMaxEpoch = TimeSpan.FromMilliseconds((data |> FSharp.Collections.Array.maxBy (fun i -> i.Time)).Time) }, newCmd
+    else newModel, newCmd
 
 let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
     Container.container []
@@ -231,24 +233,24 @@ let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
 
 
 let view (model:Model) (dispatch:Dispatch<Msg>) =
-    let now = DateTime.Now
+    let data = model.CurrentData
+        //model.ChartData
+        //|> List.tryTake model.MaxShowEvents
+        //|> List.rev
+        ////|> List.map(fun item ->
+        ////    let ts = TimeSpan.FromMilliseconds(item.Time)
+        ////    let offset = -(now - (epoch + ts)).TotalMilliseconds
+        ////    { item with Time = -(now - (epoch + ts)).TotalMilliseconds })
+        //|> List.toArray
+    let nowEpoch = model.CurrentMaxEpoch
+    let now = epoch + nowEpoch
     div []
       [ Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
             [ Heading.h3 [] [ str ("Connected: " + string model.IsConnected) ] ]
         Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
             [ Heading.h3 [] [ str ("Disconnects: " + string model.Disconnects) ] ]
         Recharts.lineChart
-          [ Recharts.Props.Chart.Data (
-                let data =
-                    model.ChartData
-                    |> List.tryTake model.MaxShowEvents
-                    |> List.rev
-                    |> List.map(fun item ->
-                        let ts = TimeSpan.FromMilliseconds(item.Time)
-                        { item with Time = -(now - (epoch + ts)).TotalMilliseconds })
-                    |> List.toArray
-                Browser.console.log("WtF", data)
-                data)
+          [ Recharts.Props.Chart.Data data
             Recharts.Props.Chart.Width 600.
             Recharts.Props.Chart.Height 300.
             Recharts.Props.Chart.Margin { top = 20.; bottom = 10.; right = 30.; left = 20. } ]
@@ -258,22 +260,11 @@ let view (model:Model) (dispatch:Dispatch<Msg>) =
               [ Recharts.Props.Cartesian.DataKey "Time"
                 Recharts.Props.Cartesian.Name "Time"
                 Recharts.Props.Cartesian.Type "number"
+                //Recharts.Props.Cartesian.Domain [|"auto" :> obj; nowEpoch.TotalMilliseconds :> obj|]
+                Recharts.Props.Cartesian.Domain [|"dataMin"; "dataMax"|]
                 //Recharts.Props.Cartesian.Scale Recharts.Props.ScaleType.UtcTime
-                Recharts.Props.Cartesian.TickFormatter (fun obj ->
-                    let offset = System.Math.Abs(float obj)
-                    if offset < 1. then "Now"
-                    else
-                        let ts = TimeSpan.FromMilliseconds offset
-                        let ticks = ts.Ticks % 1000000000L
-                        let timeString = sprintf "-%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
-                        timeString.TrimEnd '0' )
-                ] []
                 //Recharts.Props.Cartesian.TickFormatter (fun obj ->
-                //    let msSinceEpoch = float obj
-                //    let date2 = epoch + TimeSpan.FromMilliseconds(msSinceEpoch)
-                //    let ts = now - date2
-                //    let offset = ts.TotalMilliseconds
-                //    //let offset = now - ticks
+                //    let offset = System.Math.Abs(float obj)
                 //    if offset < 1. then "Now"
                 //    else
                 //        let ts = TimeSpan.FromMilliseconds offset
@@ -281,6 +272,16 @@ let view (model:Model) (dispatch:Dispatch<Msg>) =
                 //        let timeString = sprintf "-%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
                 //        timeString.TrimEnd '0' )
                 //] []
+                Recharts.Props.Cartesian.TickFormatter (fun obj ->
+                    let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
+                    let offset = (now - (epoch + tsSinceEpoch)).TotalMilliseconds
+                    if offset < 1. then "Now"
+                    else
+                        let ts = TimeSpan.FromMilliseconds offset
+                        let ticks = ts.Ticks % 1000000000L
+                        let timeString = sprintf "-%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
+                        timeString.TrimEnd '0' )
+                ] []
                 
             Recharts.yaxis [] []
             Recharts.line

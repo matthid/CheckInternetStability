@@ -9,17 +9,23 @@ open Saturn
 open Shared
 open Microsoft.AspNetCore.SignalR
 open Microsoft.AspNetCore.Hosting
+open System.Reflection
 
 
-let publicPath = Path.GetFullPath "../Client/public"
+let publicPath =
+    [ Assembly.GetExecutingAssembly().Location |> Path.GetDirectoryName |> fun p -> Path.Combine(p, "public")
+      Path.GetFullPath "./public"
+      Path.GetFullPath "../Client/public" ]
+    |> List.find Directory.Exists
+
+do printfn "public path: %s" publicPath
+
 let port = 8085us
-
-let getInitCounter() : Task<Counter> = task { return { Value = 42 } }
 
 let webApp = router {
     get "/api/init" (fun next ctx ->
         task {
-            let! counter = getInitCounter()
+            let counter = 0
             return! Successful.OK counter next ctx
         })
 }
