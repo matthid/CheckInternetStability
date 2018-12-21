@@ -234,14 +234,6 @@ let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
 
 let view (model:Model) (dispatch:Dispatch<Msg>) =
     let data = model.CurrentData
-        //model.ChartData
-        //|> List.tryTake model.MaxShowEvents
-        //|> List.rev
-        ////|> List.map(fun item ->
-        ////    let ts = TimeSpan.FromMilliseconds(item.Time)
-        ////    let offset = -(now - (epoch + ts)).TotalMilliseconds
-        ////    { item with Time = -(now - (epoch + ts)).TotalMilliseconds })
-        //|> List.toArray
     let nowEpoch = model.CurrentMaxEpoch
     let now = epoch + nowEpoch
     div []
@@ -262,16 +254,6 @@ let view (model:Model) (dispatch:Dispatch<Msg>) =
                 Recharts.Props.Cartesian.Type "number"
                 //Recharts.Props.Cartesian.Domain [|"auto" :> obj; nowEpoch.TotalMilliseconds :> obj|]
                 Recharts.Props.Cartesian.Domain [|"dataMin"; "dataMax"|]
-                //Recharts.Props.Cartesian.Scale Recharts.Props.ScaleType.UtcTime
-                //Recharts.Props.Cartesian.TickFormatter (fun obj ->
-                //    let offset = System.Math.Abs(float obj)
-                //    if offset < 1. then "Now"
-                //    else
-                //        let ts = TimeSpan.FromMilliseconds offset
-                //        let ticks = ts.Ticks % 1000000000L
-                //        let timeString = sprintf "-%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
-                //        timeString.TrimEnd '0' )
-                //] []
                 Recharts.Props.Cartesian.TickFormatter (fun obj ->
                     let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
                     let offset = (now - (epoch + tsSinceEpoch)).TotalMilliseconds
