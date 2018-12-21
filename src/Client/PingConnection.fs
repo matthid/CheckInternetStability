@@ -61,12 +61,30 @@ connection.on("messageReceived", fun (args:ResizeArray<obj option>) ->
     let username, message = string args.[0].Value, string args.[1].Value
     JS.console.log(sprintf "%s: Message '%s' received" username message)
 )
+let formatTimespan (ts:TimeSpan) =
+    let ticks = ts.Ticks % 1000000000L
+    let timeString = sprintf "%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
+    timeString.TrimEnd '0'
+    
+let formatDateTime (ts:DateTime) =
+    let ticks = ts.Ticks % 1000000000L
+    sprintf "%04d-%02d-%02d %02d:%02d:%02d.%7d" ts.Year ts.Month ts.Day ts.Hour ts.Minute ts.Second ticks
 
 type ChartDataPoint =
   { Delay : float
     TotalDelay : float
     Noise : float
     Time : float
+    IsInitial : bool
+    IsDisconnect : bool
+    IsConnect : bool
+    IsError : Exception option }
+
+type CSVDataPoint =
+  { Delay : float
+    TotalDelay : float
+    Noise : float
+    TimeFormat : string
     IsInitial : bool
     IsDisconnect : bool
     IsConnect : bool
@@ -89,9 +107,28 @@ type DataPoint =
     | ConnectionLost
     | ConnectionEstablished
 
-let epoch = new DateTime(1970, 1, 1, 0, 0, 0)
+let referenceDate = DateTime.Now
+let toMsSinceReferenceDate (d:DateTime) =
+    (d - referenceDate).TotalMilliseconds
+let fromMsSinceReferenceDate (ms:float) =
+    referenceDate + TimeSpan.FromMilliseconds(ms)
+    
+let toCsvPoint (p:ChartDataPoint) : CSVDataPoint =
+    let time = fromMsSinceReferenceDate p.Time
+
+    { TotalDelay = p.TotalDelay
+      Delay = p.Delay
+      Noise = p.Noise
+      TimeFormat = formatDateTime time
+      IsInitial = p.IsInitial
+      IsDisconnect = p.IsDisconnect
+      IsConnect= p.IsConnect
+      IsError = p.IsError }
+
+//let epoch = new DateTime(1970, 1, 1, 0, 0, 0)
 let fromSimpleDataPoint (ts:DateTime) (dp:DataPoint) =
-    let ticks = (ts - epoch).TotalMilliseconds
+    //let ticks = (ts - epoch).TotalMilliseconds
+    let ticks = toMsSinceReferenceDate ts
     match dp with
     | Ping span ->
         { createPoint span.Delay ticks with TotalDelay = span.TotalDelay; Noise = span.Noise }
@@ -108,13 +145,13 @@ type Model =
   { PingInterval : TimeSpan
     ChartData : ChartDataPoint list
     CurrentData : ChartDataPoint array
-    CurrentMaxEpoch : TimeSpan
+    CurrentMaxTime : DateTime
     Disconnects : int
     DisconnectedTime : TimeSpan
     PingRunning : bool
     IsConnected : bool
     MaxShowEvents : int
-    CSVData : (ChartDataPoint array * DateTime) option }
+    CSVData : (CSVDataPoint array * DateTime) option }
 
 type Msg =
     | SetPingInterval of TimeSpan
@@ -163,7 +200,7 @@ let init () : Model * Cmd<Msg> =
           MaxShowEvents = 60
           ChartData = [fromSimpleDataPoint DateTime.Now Start]
           CurrentData = [|fromSimpleDataPoint DateTime.Now Start|]
-          CurrentMaxEpoch = DateTime.Now - epoch
+          CurrentMaxTime = DateTime.Now
           Disconnects = 0
           DisconnectedTime = TimeSpan.Zero
           CSVData = None
@@ -173,8 +210,9 @@ let init () : Model * Cmd<Msg> =
 let getSinceLastDisconnected (model:Model) =
     match model.ChartData |> List.tryFind (fun p -> p.IsDisconnect) with
     | Some p ->
-        let ts = TimeSpan.FromMilliseconds p.Time
-        DateTime.Now - (epoch + ts)
+        let ts = fromMsSinceReferenceDate(p.Time)
+        //let ts = TimeSpan.FromTicks p.Time
+        DateTime.Now - ts
     | None -> TimeSpan.Zero
 
 let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg> =
@@ -221,6 +259,7 @@ let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg
         | GenerateCSV ->
             let data =
                 currentModel.ChartData
+                |> List.map (toCsvPoint)
                 |> List.rev
                 |> List.toArray
             { currentModel with CSVData = Some (data, DateTime.Now)}, Cmd.none
@@ -233,7 +272,7 @@ let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg
             |> List.rev
             |> List.toArray
         
-        { newModel with CurrentData = data; CurrentMaxEpoch = TimeSpan.FromMilliseconds((data |> FSharp.Collections.Array.maxBy (fun i -> i.Time)).Time) }, newCmd
+        { newModel with CurrentData = data; CurrentMaxTime = fromMsSinceReferenceDate((data |> FSharp.Collections.Array.maxBy (fun i -> i.Time)).Time) }, newCmd
     else newModel, newCmd
 
 let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
@@ -249,15 +288,11 @@ let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
                 [ Input.Option.DefaultValue (string model.MaxShowEvents)
                   Input.Option.OnChange (fun e -> dispatch (Msg.SetMaxShowEvents <| int e.Value)) ] ] ]
 
-let formatTimespan (ts:TimeSpan) =
-    let ticks = ts.Ticks % 1000000000L
-    let timeString = sprintf "%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
-    timeString.TrimEnd '0'
+
 
 let view allowLongRunning (model:Model) (dispatch:Dispatch<Msg>) =
     let data = model.CurrentData
-    let nowEpoch = model.CurrentMaxEpoch
-    let now = epoch + nowEpoch
+    let maxNow = model.CurrentMaxTime
     div []
       [ Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
             [ p [] [ str "Connected: "; str <| string model.IsConnected; br []
@@ -285,11 +320,12 @@ let view allowLongRunning (model:Model) (dispatch:Dispatch<Msg>) =
                     //Recharts.Props.Cartesian.Domain [|"auto" :> obj; nowEpoch.TotalMilliseconds :> obj|]
                     Recharts.Props.Cartesian.Domain [|"dataMin"; "dataMax"|]
                     Recharts.Props.Cartesian.TickFormatter (fun obj ->
-                        let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
-                        let offset = (now - (epoch + tsSinceEpoch)).TotalMilliseconds
+                        let ts = maxNow - fromMsSinceReferenceDate(float obj)
+                        //let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
+                        let offset = ts.TotalMilliseconds // (now - (epoch + tsSinceEpoch)).TotalMilliseconds
                         if offset < 1. then "Now"
                         else
-                            let ts = TimeSpan.FromMilliseconds offset
+                            //let ts = TimeSpan.FromMilliseconds offset
                             sprintf "-%s" (formatTimespan ts))
                     ] []
                 
