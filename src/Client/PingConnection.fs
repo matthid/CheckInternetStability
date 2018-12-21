@@ -110,9 +110,11 @@ type Model =
     CurrentData : ChartDataPoint array
     CurrentMaxEpoch : TimeSpan
     Disconnects : int
+    DisconnectedTime : TimeSpan
     PingRunning : bool
     IsConnected : bool
-    MaxShowEvents : int }
+    MaxShowEvents : int
+    CSVData : (ChartDataPoint array * DateTime) option }
 
 type Msg =
     | SetPingInterval of TimeSpan
@@ -122,6 +124,7 @@ type Msg =
     | IntervalFinished
     | ConnectionClosed of Error
     | SetMaxShowEvents of int
+    | GenerateCSV
 
 let pingPromise() =
     Cmd.ofPromise ping ()
@@ -162,14 +165,24 @@ let init () : Model * Cmd<Msg> =
           CurrentData = [|fromSimpleDataPoint DateTime.Now Start|]
           CurrentMaxEpoch = DateTime.Now - epoch
           Disconnects = 0
+          DisconnectedTime = TimeSpan.Zero
+          CSVData = None
           IsConnected = false }
     initialModel, Cmd.batch [ registerOnClose(); connectPromise () ]
+
+let getSinceLastDisconnected (model:Model) =
+    match model.ChartData |> List.tryFind (fun p -> p.IsDisconnect) with
+    | Some p ->
+        let ts = TimeSpan.FromMilliseconds p.Time
+        DateTime.Now - (epoch + ts)
+    | None -> TimeSpan.Zero
 
 let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg> =
     let addDataPoint date p model =
         //model.ChartData.Add(fromSimpleDataPoint date p)
         //model
-        { model with ChartData = fromSimpleDataPoint date p :: model.ChartData }
+        { model with
+            ChartData = fromSimpleDataPoint date p :: model.ChartData }
 
     let newModel, newCmd =
         match msg with
@@ -185,7 +198,8 @@ let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg
             let timeout = int currentModel.PingInterval.TotalMilliseconds
             nextModel, if currentModel.IsConnected then intervalFinishedPromise timeout else Cmd.none
         | SetConnectionState (Ok ()) ->
-            { currentModel with IsConnected = true; PingRunning = true } |> addDataPoint DateTime.Now ConnectionEstablished, pingPromise()
+            let newDisconnectSpan = getSinceLastDisconnected currentModel
+            { currentModel with IsConnected = true; PingRunning = true; DisconnectedTime = currentModel.DisconnectedTime + newDisconnectSpan } |> addDataPoint DateTime.Now ConnectionEstablished, pingPromise()
         | SetConnectionState (Error err) ->
             let timeout = int currentModel.PingInterval.TotalMilliseconds
             currentModel, tryReconnectPromise timeout
@@ -204,10 +218,15 @@ let update allowLongRunning (msg : Msg) (currentModel : Model) : Model * Cmd<Msg
         | SetMaxShowEvents ev ->
             let nextModel = { currentModel with MaxShowEvents = ev }
             nextModel, Cmd.none
+        | GenerateCSV ->
+            let data =
+                currentModel.ChartData
+                |> List.rev
+                |> List.toArray
+            { currentModel with CSVData = Some (data, DateTime.Now)}, Cmd.none
 
     if allowLongRunning && not newModel.PingRunning then
         // re-calculate CurrentData
-        Browser.console.log("allowLongRunning")
         let data =
             newModel.ChartData
             |> List.tryTake newModel.MaxShowEvents
@@ -230,59 +249,68 @@ let viewOptions (model:Model) (dispatch:Dispatch<Msg>) =
                 [ Input.Option.DefaultValue (string model.MaxShowEvents)
                   Input.Option.OnChange (fun e -> dispatch (Msg.SetMaxShowEvents <| int e.Value)) ] ] ]
 
+let formatTimespan (ts:TimeSpan) =
+    let ticks = ts.Ticks % 1000000000L
+    let timeString = sprintf "%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
+    timeString.TrimEnd '0'
 
-
-let view (model:Model) (dispatch:Dispatch<Msg>) =
+let view allowLongRunning (model:Model) (dispatch:Dispatch<Msg>) =
     let data = model.CurrentData
     let nowEpoch = model.CurrentMaxEpoch
     let now = epoch + nowEpoch
     div []
       [ Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
-            [ Heading.h3 [] [ str ("Connected: " + string model.IsConnected) ] ]
-        Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
-            [ Heading.h3 [] [ str ("Disconnects: " + string model.Disconnects) ] ]
-        Recharts.lineChart
-          [ Recharts.Props.Chart.Data data
-            Recharts.Props.Chart.Width 600.
-            Recharts.Props.Chart.Height 300.
-            Recharts.Props.Chart.Margin { top = 20.; bottom = 10.; right = 30.; left = 20. } ]
-          [ Recharts.tooltip [] []
-            Recharts.legend [] []
-            Recharts.xaxis
-              [ Recharts.Props.Cartesian.DataKey "Time"
-                Recharts.Props.Cartesian.Name "Time"
-                Recharts.Props.Cartesian.Type "number"
-                //Recharts.Props.Cartesian.Domain [|"auto" :> obj; nowEpoch.TotalMilliseconds :> obj|]
-                Recharts.Props.Cartesian.Domain [|"dataMin"; "dataMax"|]
-                Recharts.Props.Cartesian.TickFormatter (fun obj ->
-                    let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
-                    let offset = (now - (epoch + tsSinceEpoch)).TotalMilliseconds
-                    if offset < 1. then "Now"
-                    else
-                        let ts = TimeSpan.FromMilliseconds offset
-                        let ticks = ts.Ticks % 1000000000L
-                        let timeString = sprintf "-%02d:%02d:%02d.%7d" ts.Hours ts.Minutes ts.Seconds ticks
-                        timeString.TrimEnd '0' )
-                ] []
+            [ p [] [ str "Connected: "; str <| string model.IsConnected; br []
+                     str "Disconnects: "; str <| string model.Disconnects; br []
+                     str "Disconnected Time: "; str (formatTimespan (if model.IsConnected then model.DisconnectedTime else model.DisconnectedTime + getSinceLastDisconnected model)) ]
+              ]
+        button [ OnClick (fun _ -> dispatch GenerateCSV) ] [ str "Generate CSV" ]
+        div [] (match model.CSVData with
+                | Some (data, date) ->
+                    [ ReactCsv.csvLink [ReactCsv.Data data] [ str "Download data from "; str <| string date ] ]
+                | _ -> [])
+        PerfHelpers.disableRender (not allowLongRunning || model.PingRunning)
+        //div []
+          [ Recharts.lineChart
+              [ Recharts.Props.Chart.Data data
+                Recharts.Props.Chart.Width 600.
+                Recharts.Props.Chart.Height 300.
+                Recharts.Props.Chart.Margin { top = 20.; bottom = 10.; right = 30.; left = 20. } ]
+              [ Recharts.tooltip [] []
+                Recharts.legend [] []
+                Recharts.xaxis
+                  [ Recharts.Props.Cartesian.DataKey "Time"
+                    Recharts.Props.Cartesian.Name "Time"
+                    Recharts.Props.Cartesian.Type "number"
+                    //Recharts.Props.Cartesian.Domain [|"auto" :> obj; nowEpoch.TotalMilliseconds :> obj|]
+                    Recharts.Props.Cartesian.Domain [|"dataMin"; "dataMax"|]
+                    Recharts.Props.Cartesian.TickFormatter (fun obj ->
+                        let tsSinceEpoch = TimeSpan.FromMilliseconds(float obj)
+                        let offset = (now - (epoch + tsSinceEpoch)).TotalMilliseconds
+                        if offset < 1. then "Now"
+                        else
+                            let ts = TimeSpan.FromMilliseconds offset
+                            sprintf "-%s" (formatTimespan ts))
+                    ] []
                 
-            Recharts.yaxis [] []
-            Recharts.line
-              [ Recharts.Props.Cartesian.Type "monotone"
-                Recharts.Props.Cartesian.DataKey "Delay"
-                Recharts.Props.Cartesian.Stroke "#8884d8"
-                //Recharts.Props.Cartesian.Label renderLabel
-                ] []
-            Recharts.line
-              [ Recharts.Props.Cartesian.Type "monotone"
-                Recharts.Props.Cartesian.DataKey "Noise"
-                Recharts.Props.Cartesian.Stroke "#ffc658"
-                //Recharts.Props.Cartesian.Label renderLabel
-                ] []
-            Recharts.line
-              [ Recharts.Props.Cartesian.Type "monotone"
-                Recharts.Props.Cartesian.DataKey "TotalDelay"
-                Recharts.Props.Cartesian.Stroke "#82ca9d"
-                //Recharts.Props.Cartesian.Label renderLabel
-                ] []
-            ]
+                Recharts.yaxis [] []
+                Recharts.line
+                  [ Recharts.Props.Cartesian.Type "monotone"
+                    Recharts.Props.Cartesian.DataKey "Delay"
+                    Recharts.Props.Cartesian.Stroke "#8884d8"
+                    //Recharts.Props.Cartesian.Label renderLabel
+                    ] []
+                Recharts.line
+                  [ Recharts.Props.Cartesian.Type "monotone"
+                    Recharts.Props.Cartesian.DataKey "Noise"
+                    Recharts.Props.Cartesian.Stroke "#ffc658"
+                    //Recharts.Props.Cartesian.Label renderLabel
+                    ] []
+                Recharts.line
+                  [ Recharts.Props.Cartesian.Type "monotone"
+                    Recharts.Props.Cartesian.DataKey "TotalDelay"
+                    Recharts.Props.Cartesian.Stroke "#82ca9d"
+                    //Recharts.Props.Cartesian.Label renderLabel
+                    ] []
                 ]
+                ] ]

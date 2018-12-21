@@ -80,3 +80,34 @@ let rootZoneHandle = RootZoneHandle()
 let measure startPromise = rootZoneHandle.Measure startPromise
 
 let runRoot f = rootZoneHandle.RootZone.run f
+
+open Fable.Import.React
+open Fable.Helpers
+open Fable.Helpers.React
+
+type DisableProps = { DisableRender : bool }
+type DisableState = { ShouldUpdateAfterEnable: bool }
+
+type DisableChildRender(initialProps) as x =
+    inherit Component<DisableProps, DisableState>(initialProps)
+    do x.setInitState { ShouldUpdateAfterEnable = false }
+    override x.shouldComponentUpdate(nextProps, nextState) =
+        let somethingChanged = nextProps.DisableRender <> x.props.DisableRender
+
+        if nextProps.DisableRender then
+            if not x.state.ShouldUpdateAfterEnable then
+                x.setState(fun oldState _ -> { oldState with ShouldUpdateAfterEnable = somethingChanged || oldState.ShouldUpdateAfterEnable })
+            false
+        else
+            
+            if not nextState.ShouldUpdateAfterEnable && x.state.ShouldUpdateAfterEnable then
+                false
+            else somethingChanged || x.state.ShouldUpdateAfterEnable
+    override x.componentDidUpdate(prevProps, prevState) =
+        if x.state.ShouldUpdateAfterEnable then
+            x.setState(fun oldState _ -> { oldState with ShouldUpdateAfterEnable = false })
+
+    override this.render() =
+        fragment [] base.children
+
+let inline disableRender doDisable childs = ofType<DisableChildRender,_,_> { DisableRender = doDisable } childs

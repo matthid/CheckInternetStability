@@ -98,7 +98,7 @@ let view (model : Model) (dispatch : Msg -> unit) =
                 //Content.content [ Content.Modifiers [ Modifier.TextAlignment (Screen.All, TextAlignment.Centered) ] ]
                 //    [ Heading.h3 [] [ str ("Speed test interval: " + string model.SpeedTest) ] ]
                 PingConnection.viewOptions model.PingerModel (Msg.PingerMessage >> dispatch)
-                PingConnection.view model.PingerModel (Msg.PingerMessage >> dispatch)
+                PingConnection.view true model.PingerModel (Msg.PingerMessage >> dispatch)
               ]
 
           Footer.footer [ ]
